@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PAC extractor</title>
+  <style>
+    body {
+      background: #000000;
+    }
+    #upload {
+      display:none;
+    }
+    .centered {
+      position: fixed;
+      left: 50%;
+      top: 50%;
+      transform: translate(-50%, -50%);
+      background: rgba(255,255,255,0.8);
+      border-radius: 20px;
+      padding:20px;
+    }
+  </style>
+</head>
+<body>
+
+<div id="page-container">
+  <div id="vnikeyInput" class="centered">
+    Input VNI key: <input type="text" id="vnikey">
+  </div>
+  <div id="upload" class="centered">You can now drag one or multiple .PAC files into this browser window. <br>They will automatically get extracted into their contained .VNI and .PAL files.</div>
+</div>
+
+  <script>
+    async function sha1(input) {
+      // Encode the input string to a Uint8Array
+      const encoder = new TextEncoder();
+      const data = encoder.encode(input);
+        
+      // Generate the SHA-1 hash
+      const hashBuffer = await window.crypto.subtle.digest('SHA-1', data);
+       
+      // Convert the hash to a hex string
+      const hashArray = Array.from(new Uint8Array(hashBuffer));
+      const hashHex = hashArray.map(byte => byte.toString(16).padStart(2, '0')).join('');
+       
+      return hashHex; // Return the SHA-1 hash as a hex string
+    }
+
+    const vnikeyInput = document.getElementById("vnikey");    
+    var vnikey
+    vnikeyInput.addEventListener("input", async function(event) {
+      if (await sha1(vnikeyInput.value) == "a535da2ac907540fccf31336d10bcf1fcb4372e7") {
+        vnikey = new Uint8Array(vnikeyInput.value.match(/../g).map(h=>parseInt(h,16))).buffer
+        console.log("Correct vnikey!")
+        document.getElementById("vnikeyInput").remove()
+        document.getElementById("upload").style.display="block"
+
+        document.addEventListener("dragover", function(event) {
+          event.preventDefault();
+        });
+        document.addEventListener("drop", async function(event) {
+          event.preventDefault();      
+          console.log(event.dataTransfer.files)
+          aesKey = await window.crypto.subtle.importKey("raw", vnikey, "AES-CBC", true, [
+            "encrypt",
+            "decrypt",
+          ]);
+
+          for (const droppedFile of event.dataTransfer.files) {
+            fileBuffer = await droppedFile.arrayBuffer()
+            dataView = new DataView(fileBuffer);
+            console.log(droppedFile.name)
+            header = dataView.getUint32(0)
+            console.log(header)
+            if (header != 1346454304) // The string "PAC "
+              return console.log("Not a PAC file")
+              
+            version = dataView.getUint8(4)
+            console.log("PAC version", version)
+            // No idea if there is anything other than version 1? Not used for anything currently.
+            currentBuffer = fileBuffer.slice(5)
+            console.log(currentBuffer.byteLength)
+            while (currentBuffer.byteLength > 0) {
+              fileDataView = new DataView(currentBuffer);
+              type = fileDataView.getUint16(0)
+              fileSize = fileDataView.getUint32(2)
+              console.log("File type:", type, " of size:", fileSize)
+              fileBuffer = currentBuffer.slice(6, 6+fileSize)
+
+
+              decryptedFile = await window.crypto.subtle.decrypt({ name: "AES-CBC", iv: vnikey }, aesKey, fileBuffer)
+              ds = new DecompressionStream("gzip");
+              writer = ds.writable.getWriter();
+              writer.write(decryptedFile)
+              writer.close();
+              decompressedFile = await new Response(ds.readable).arrayBuffer();
+              const blob = new Blob( [ decompressedFile ] );	
+              const objectURL = URL.createObjectURL( blob );
+              const link = document.createElement( 'a' );
+              link.style.display = 'none';
+              document.body.appendChild( link );
+              link.href = objectURL;
+              link.href = URL.createObjectURL( blob );
+              link.download = droppedFile.name.replace(".pac", type==1 ? ".pal" : ".vni")
+              link.click();
+              currentBuffer = currentBuffer.slice(6+fileSize)
+            }
+
+
+          }
+        });
+
+
+      }
+    })   
+
+    vnikeyInput.dispatchEvent(new InputEvent('input'))
+    
+  </script>
+
+</body>
+</html>
